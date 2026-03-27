@@ -18,7 +18,7 @@ st.set_page_config(
 # =========================================
 # CONFIG
 # =========================================
-GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18vbqYiBLv1M-F4JXg45Fn8E9a-rBYFfF/export?format=csv&gid=1737217651"
+GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1pLeNHeCQnlbTj-dIat7LajVLZNVIDC5eeEzhyBssz7U/export?format=csv&gid=0"
 
 COLUMNAS_OBJETIVO = ["Fecha entrega", "Cliente", "Producto", "Total producto"]
 DIAS_LABORALES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
