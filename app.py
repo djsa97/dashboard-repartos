@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import timedelta
+from datetime import datetime, timedelta
 import ssl
 import io
 import urllib.request
@@ -22,6 +22,10 @@ GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18vbqYiBLv1M-F4JX
 
 COLUMNAS_OBJETIVO = ["Fecha entrega", "Cliente", "Producto", "Total producto"]
 DIAS_LABORALES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
+
+# Día de corte:
+# 5 = sábado
+DIA_CORTE = 5
 
 # =========================================
 # ESTILO
@@ -79,7 +83,7 @@ def limpiar_numeros(col: pd.Series) -> pd.Series:
 
         s = s.replace("Gs", "").replace("₲", "").replace(" ", "")
 
-        # Caso típico Paraguay: 83.875 / 1.250.000
+        # Caso Paraguay: 83.875 / 1.250.000
         if "." in s and "," not in s:
             partes = s.split(".")
             if len(partes) > 1 and all(len(p) == 3 for p in partes[1:]):
@@ -97,10 +101,9 @@ def limpiar_numeros(col: pd.Series) -> pd.Series:
             except:
                 return 0.0
 
-        # Caso decimal con coma: 12,5
+        # Caso decimal con coma
         if "," in s and "." not in s:
             partes = s.split(",")
-            # Si después de la coma hay exactamente 3 dígitos, probablemente es miles
             if len(partes) > 1 and all(len(p) == 3 for p in partes[1:]):
                 s = "".join(partes)
                 try:
@@ -139,6 +142,31 @@ def nombre_dia_es(fecha) -> str:
     }
     return dias[fecha.weekday()]
 
+def obtener_domingo_de_semana(fecha):
+    # lunes=0 ... domingo=6
+    dias_desde_domingo = (fecha.weekday() + 1) % 7
+    return fecha - timedelta(days=dias_desde_domingo)
+
+def obtener_rango_semana_objetivo():
+    """
+    Lógica operativa:
+    - domingo a viernes: mostrar semana actual de reparto
+    - sábado en adelante: mostrar semana siguiente
+    """
+    hoy = datetime.today().date()
+
+    domingo_actual = obtener_domingo_de_semana(hoy)
+    sabado_actual = domingo_actual + timedelta(days=6)
+
+    if hoy.weekday() >= DIA_CORTE:
+        domingo_objetivo = domingo_actual + timedelta(days=7)
+        sabado_objetivo = domingo_objetivo + timedelta(days=6)
+    else:
+        domingo_objetivo = domingo_actual
+        sabado_objetivo = sabado_actual
+
+    return domingo_objetivo, sabado_objetivo
+
 @st.cache_data(ttl=120)
 def cargar_datos():
     csv_texto = descargar_csv(GOOGLE_SHEET_CSV_URL)
@@ -154,13 +182,11 @@ def cargar_datos():
     if faltantes:
         raise ValueError(f"Faltan columnas: {faltantes}. Columnas detectadas: {list(df.columns)}")
 
-    # Limpieza principal
     df["Fecha entrega"] = pd.to_datetime(df["Fecha entrega"], errors="coerce", dayfirst=True)
     df["Cliente"] = df["Cliente"].astype(str).str.strip()
     df["Producto"] = df["Producto"].astype(str).str.strip()
     df["Total producto"] = limpiar_numeros(df["Total producto"])
 
-    # Vendedora
     if "Vende" in df.columns and "Vendedora" not in df.columns:
         df["Vendedora"] = df["Vende"]
 
@@ -170,7 +196,6 @@ def cargar_datos():
     df["Vendedora"] = df["Vendedora"].astype(str).str.strip()
     df["Vendedora"] = df["Vendedora"].replace("", "Sin asignar").fillna("Sin asignar")
 
-    # Filtrar basura
     df = df.dropna(subset=["Fecha entrega"])
     df = df[df["Cliente"] != ""]
     df = df[df["Cliente"].str.lower() != "nan"]
@@ -186,6 +211,8 @@ except Exception as e:
     st.error(f"No pude leer la base: {e}")
     st.stop()
 
+domingo_objetivo, sabado_objetivo = obtener_rango_semana_objetivo()
+
 # =========================================
 # DIAGNÓSTICO
 # =========================================
@@ -193,12 +220,11 @@ with st.expander("Ver diagnóstico de lectura"):
     st.write(f"Fila de encabezado detectada: {fila_header + 1}")
     st.write("Columnas detectadas:")
     st.write(list(df.columns))
-    st.write("Vista previa:")
+    st.write(f"Semana objetivo de seguimiento: {domingo_objetivo.strftime('%d/%m/%Y')} a {sabado_objetivo.strftime('%d/%m/%Y')}")
     st.dataframe(df.head(10), use_container_width=True, hide_index=True)
 
 # =========================================
 # LÓGICA DE PEDIDOS
-# Un pedido = suma de líneas de un cliente en una fecha
 # =========================================
 pedidos_por_fecha = (
     df.groupby(["Cliente", "Vendedora", "Fecha entrega"], as_index=False)["Total producto"]
@@ -206,7 +232,6 @@ pedidos_por_fecha = (
     .rename(columns={"Total producto": "Total pedido"})
 )
 
-# Resumen histórico correcto
 resumen = (
     pedidos_por_fecha.groupby(["Cliente", "Vendedora"], as_index=False)
     .agg(
@@ -216,15 +241,11 @@ resumen = (
 )
 
 # =========================================
-# SEMANA TOMADA DESDE LA ÚLTIMA FECHA DE LA BASE
+# SEMANA OBJETIVO
 # =========================================
-fecha_max = pedidos_por_fecha["Fecha entrega"].max()
-lunes_semana = fecha_max - timedelta(days=fecha_max.weekday())
-viernes_semana = lunes_semana + timedelta(days=4)
-
 pedidos_semana = pedidos_por_fecha[
-    (pedidos_por_fecha["Fecha entrega"] >= lunes_semana) &
-    (pedidos_por_fecha["Fecha entrega"] <= viernes_semana)
+    (pedidos_por_fecha["Fecha entrega"].dt.date >= domingo_objetivo) &
+    (pedidos_por_fecha["Fecha entrega"].dt.date <= sabado_objetivo)
 ].copy()
 
 pedidos_semana["Dia"] = pedidos_semana["Fecha entrega"].apply(nombre_dia_es)
@@ -244,9 +265,6 @@ for dia in DIAS_LABORALES:
     if dia not in pivot_semana.columns:
         pivot_semana[dia] = 0
 
-# =========================================
-# BASE FINAL
-# =========================================
 dashboard = resumen.merge(
     pivot_semana,
     on=["Cliente", "Vendedora"],
@@ -276,7 +294,6 @@ dashboard = dashboard.sort_values(
     ascending=[True, False]
 )
 
-# Formato visual
 dashboard_mostrar = dashboard[[
     "Cliente",
     "Última fecha pedido",
@@ -290,7 +307,6 @@ dashboard_mostrar = dashboard[[
 ]].copy()
 
 dashboard_mostrar = dashboard_mostrar.rename(columns={"Pedido promedio num": "Pedido promedio"})
-
 dashboard_mostrar["Pedido promedio"] = dashboard_mostrar["Pedido promedio"].apply(formatear_entero)
 
 for dia in DIAS_LABORALES:
@@ -300,6 +316,7 @@ for dia in DIAS_LABORALES:
 # UI
 # =========================================
 st.title("Dashboard de Seguimiento de Clientes - Repartos")
+st.caption(f"Semana objetivo: {domingo_objetivo.strftime('%d/%m/%Y')} a {sabado_objetivo.strftime('%d/%m/%Y')}")
 
 st.sidebar.header("Filtros")
 vendedoras = ["Todas"] + sorted(dashboard_mostrar["Vendedora"].dropna().unique().tolist())
@@ -318,13 +335,13 @@ clientes_sin_pedido = dashboard_base_filtrado[~dashboard_base_filtrado["Tiene pe
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Clientes totales", clientes_total)
-col2.metric("Con pedido esta semana", len(clientes_con_pedido))
-col3.metric("Sin pedido esta semana", len(clientes_sin_pedido))
+col2.metric("Con pedido cargado para esa semana", len(clientes_con_pedido))
+col3.metric("Sin pedido cargado para esa semana", len(clientes_sin_pedido))
 
 st.subheader("Seguimiento general")
 st.dataframe(dashboard_filtrado, use_container_width=True, hide_index=True)
 
-st.subheader("Clientes sin pedido esta semana")
+st.subheader("Clientes sin pedido para esa semana")
 clientes_sin_pedido_mostrar = clientes_sin_pedido[[
     "Cliente",
     "Última fecha pedido",
