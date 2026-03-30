@@ -18,13 +18,12 @@ st.set_page_config(
 # =========================================
 # CONFIG
 # =========================================
-GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1pLeNHeCQnlbTj-dIat7LajVLZNVIDC5eeEzhyBssz7U/export?format=csv&gid=0"
+GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18vbqYiBLv1M-F4JXg45Fn8E9a-rBYFfF/export?format=csv&gid=1737217651"
 
 COLUMNAS_OBJETIVO = ["Fecha entrega", "Cliente", "Producto", "Total producto"]
 DIAS_LABORALES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
 
-# Día de corte:
-# 5 = sábado
+# sábado = 5
 DIA_CORTE = 5
 
 # =========================================
@@ -143,7 +142,6 @@ def nombre_dia_es(fecha) -> str:
     return dias[fecha.weekday()]
 
 def obtener_domingo_de_semana(fecha):
-    # lunes=0 ... domingo=6
     dias_desde_domingo = (fecha.weekday() + 1) % 7
     return fecha - timedelta(days=dias_desde_domingo)
 
@@ -224,7 +222,7 @@ with st.expander("Ver diagnóstico de lectura"):
     st.dataframe(df.head(10), use_container_width=True, hide_index=True)
 
 # =========================================
-# LÓGICA DE PEDIDOS
+# PEDIDOS POR FECHA
 # =========================================
 pedidos_por_fecha = (
     df.groupby(["Cliente", "Vendedora", "Fecha entrega"], as_index=False)["Total producto"]
@@ -232,6 +230,9 @@ pedidos_por_fecha = (
     .rename(columns={"Total producto": "Total pedido"})
 )
 
+# =========================================
+# RESUMEN HISTÓRICO
+# =========================================
 resumen = (
     pedidos_por_fecha.groupby(["Cliente", "Vendedora"], as_index=False)
     .agg(
@@ -265,6 +266,9 @@ for dia in DIAS_LABORALES:
     if dia not in pivot_semana.columns:
         pivot_semana[dia] = 0
 
+# =========================================
+# BASE FINAL
+# =========================================
 dashboard = resumen.merge(
     pivot_semana,
     on=["Cliente", "Vendedora"],
@@ -303,7 +307,8 @@ dashboard_mostrar = dashboard[[
     "Martes",
     "Miércoles",
     "Jueves",
-    "Viernes"
+    "Viernes",
+    "Tiene pedido"
 ]].copy()
 
 dashboard_mostrar = dashboard_mostrar.rename(columns={"Pedido promedio num": "Pedido promedio"})
@@ -324,28 +329,32 @@ filtro_vendedora = st.sidebar.selectbox("Vendedora", vendedoras)
 
 if filtro_vendedora != "Todas":
     dashboard_filtrado = dashboard_mostrar[dashboard_mostrar["Vendedora"] == filtro_vendedora].copy()
-    dashboard_base_filtrado = dashboard[dashboard["Vendedora"] == filtro_vendedora].copy()
 else:
     dashboard_filtrado = dashboard_mostrar.copy()
-    dashboard_base_filtrado = dashboard.copy()
 
-clientes_total = len(dashboard_base_filtrado)
-clientes_con_pedido = dashboard_base_filtrado[dashboard_base_filtrado["Tiene pedido"]].copy()
-clientes_sin_pedido = dashboard_base_filtrado[~dashboard_base_filtrado["Tiene pedido"]].copy()
+# =========================================
+# SEPARAR CARGADOS / NO CARGADOS
+# =========================================
+clientes_cargados = dashboard_filtrado[dashboard_filtrado["Tiene pedido"]].copy()
+clientes_no_cargados = dashboard_filtrado[~dashboard_filtrado["Tiene pedido"]].copy()
 
+# =========================================
+# KPIs
+# =========================================
 col1, col2, col3 = st.columns(3)
-col1.metric("Clientes totales", clientes_total)
-col2.metric("Con pedido cargado para esa semana", len(clientes_con_pedido))
-col3.metric("Sin pedido cargado para esa semana", len(clientes_sin_pedido))
+col1.metric("Clientes totales", len(dashboard_filtrado))
+col2.metric("Con pedido cargado para esa semana", len(clientes_cargados))
+col3.metric("Sin pedido cargado para esa semana", len(clientes_no_cargados))
 
+# =========================================
+# TABLA 1: SOLO CLIENTES CARGADOS
+# =========================================
 st.subheader("Seguimiento general")
-st.dataframe(dashboard_filtrado, use_container_width=True, hide_index=True)
 
-st.subheader("Clientes sin pedido para esa semana")
-clientes_sin_pedido_mostrar = clientes_sin_pedido[[
+clientes_cargados_mostrar = clientes_cargados[[
     "Cliente",
     "Última fecha pedido",
-    "Pedido promedio num",
+    "Pedido promedio",
     "Vendedora",
     "Lunes",
     "Martes",
@@ -354,10 +363,26 @@ clientes_sin_pedido_mostrar = clientes_sin_pedido[[
     "Viernes"
 ]].copy()
 
-clientes_sin_pedido_mostrar = clientes_sin_pedido_mostrar.rename(columns={"Pedido promedio num": "Pedido promedio"})
-clientes_sin_pedido_mostrar["Pedido promedio"] = clientes_sin_pedido_mostrar["Pedido promedio"].apply(formatear_entero)
+st.dataframe(clientes_cargados_mostrar, use_container_width=True, hide_index=True)
+
+# =========================================
+# TABLA 2: SOLO CLIENTES SIN PEDIDO
+# =========================================
+st.subheader("Clientes sin pedido para esa semana")
+
+clientes_no_cargados_mostrar = clientes_no_cargados[[
+    "Cliente",
+    "Última fecha pedido",
+    "Pedido promedio",
+    "Vendedora",
+    "Lunes",
+    "Martes",
+    "Miércoles",
+    "Jueves",
+    "Viernes"
+]].copy()
 
 for dia in DIAS_LABORALES:
-    clientes_sin_pedido_mostrar[dia] = ""
+    clientes_no_cargados_mostrar[dia] = ""
 
-st.dataframe(clientes_sin_pedido_mostrar, use_container_width=True, hide_index=True)
+st.dataframe(clientes_no_cargados_mostrar, use_container_width=True, hide_index=True)
